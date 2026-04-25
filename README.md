@@ -90,9 +90,9 @@ PYTHONPATH=. python3 tests/e2e_test.py
 ---
 
 ## 📬 コンタクト
-- Issue: [GitHub Issues](https://github.com/YOUR_REPO/ai-toast/issues)
-- 開発者: ai-toast Project Team
+- Issue: [GitHub Issues](https://github.com/utenadev/ai-toast/issues)
+- 開発者: utenadev
 
 ---
 
-Made with ❤️ by ai-toast Project (2026)
+Made with ❤️ by utenadev (2026)
