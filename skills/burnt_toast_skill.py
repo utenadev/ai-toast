@@ -190,6 +190,50 @@ class BurntToastBackend(NotificationBackend):
             logger.error(f"BurntToast通知失敗: {e}")
             return False
 
+    async def async_notify(self, req: ToastRequest) -> bool:
+        """非同期版の通知送信（将来的なパフォーマンス改善用）"""
+        import asyncio
+        
+        ps_exe = self._get_ps_exe()
+        
+        # 実行ファイルが存在するか最終チェック
+        if not shutil.which(ps_exe) and not Path(ps_exe).exists():
+            logger.error(f"PowerShell実行ファイルが見つかりません: {ps_exe}")
+            return False
+
+        ps_command = self._build_ps_command(req)
+        full_cmd = [ps_exe] + self.ps_args + ["-EncodedCommand", self._encode_command(ps_command)]
+        
+        try:
+            # 非同期サブプロセスの実行
+            proc = await asyncio.create_subprocess_exec(
+                *full_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            # タイムアウト付きで待機
+            try:
+                stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=self.timeout)
+            except asyncio.TimeoutError:
+                proc.kill()
+                await proc.wait()
+                logger.error(f"BurntToast Timeout: {self.timeout}秒を超過")
+                return False
+            
+            if proc.returncode != 0:
+                try:
+                    err = stderr.decode('utf-8')
+                except UnicodeDecodeError:
+                    err = stderr.decode('cp932', errors='replace')
+                logger.error(f"BurntToast Error: {err.strip()}")
+                return False
+            
+            return True
+        except Exception as e:
+            logger.error(f"BurntToast非同期通知失敗: {e}")
+            return False
+
 # ==========================================
 # Skill レイヤー
 # ==========================================
@@ -260,6 +304,14 @@ class BurntToastSkill:
     def notify(self, req: ToastRequest) -> bool:
         return self.backend.notify(req)
 
+    async def async_notify(self, req: ToastRequest) -> bool:
+        """非同期版の通知送信"""
+        if hasattr(self.backend, 'async_notify'):
+            return await self.backend.async_notify(req)
+        # フォールバック: 同期版を非同期でラップ
+        import asyncio
+        return await asyncio.to_thread(self.backend.notify, req)
+
     def send(self, emotion: str, title: str, message: str, **kwargs) -> bool:
         req = self._create_request(emotion, title, message, **kwargs)
         
@@ -276,6 +328,11 @@ class BurntToastSkill:
 
         return self.notify(req)
 
+    async def async_send(self, emotion: str, title: str, message: str, **kwargs) -> bool:
+        """非同期版の感情別通知送信"""
+        req = self._create_request(emotion, title, message, **kwargs)
+        return await self.async_notify(req)
+
     # 便利なヘルパーメソッド
     def success(self, title: str, message: str, **kwargs) -> bool: return self.send("success", title, message, **kwargs)
     def error(self, title: str, message: str, **kwargs) -> bool: return self.send("error", title, message, **kwargs)
@@ -290,6 +347,24 @@ class BurntToastSkill:
         """進捗バーを更新（同一ユニークIDで上書き）"""
         req = self._create_request("waiting", "", "", unique_id=unique_id, value=value, status=status, **kwargs)
         return self.notify(req)
+
+    # 非同期版ヘルパーメソッド
+    async def async_success(self, title: str, message: str, **kwargs) -> bool:
+        return await self.async_send("success", title, message, **kwargs)
+    async def async_error(self, title: str, message: str, **kwargs) -> bool:
+        return await self.async_send("error", title, message, **kwargs)
+    async def async_warning(self, title: str, message: str, **kwargs) -> bool:
+        return await self.async_send("warning", title, message, **kwargs)
+    async def async_waiting(self, title: str, message: str, unique_id: str, **kwargs) -> bool:
+        return await self.async_send("waiting", title, message, unique_id=unique_id, **kwargs)
+    async def async_confirm(self, title: str, message: str, **kwargs) -> bool:
+        kwargs.setdefault("custom_buttons", [ToastButton("✅ 適用", "confirm:yes", "Green"), 
+                                            ToastButton("❌ 却下", "confirm:no", "Red")])
+        return await self.async_send("confirmation", title, message, **kwargs)
+    async def async_update_progress(self, unique_id: str, value: float, status: Optional[str] = None, **kwargs) -> bool:
+        """非同期版進捗バー更新"""
+        req = self._create_request("waiting", "", "", unique_id=unique_id, value=value, status=status, **kwargs)
+        return await self.async_notify(req)
 
 def get_skill(config_path: Optional[str] = None):
     skill = BurntToastSkill(config_path)

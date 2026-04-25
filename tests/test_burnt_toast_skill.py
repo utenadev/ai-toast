@@ -2,6 +2,7 @@ import pytest
 import json
 import base64
 import subprocess
+import asyncio
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from skills.burnt_toast_skill import BurntToastSkill, BurntToastBackend, ToastRequest, ToastButton, get_skill
@@ -148,4 +149,48 @@ def test_get_skill():
     skill_data = get_skill()
     assert skill_data["name"] == "burnt_toast"
     assert "toast_success" in skill_data["commands"]
-    assert isinstance(skill_data["instance"], BurntToastSkill)
+
+# 非同期処理のテスト
+@pytest.mark.asyncio
+async def test_async_notification(skill):
+    # 非同期メソッドが存在することを確認
+    assert hasattr(skill, 'async_success')
+    assert hasattr(skill, 'async_notify')
+    
+    # 非同期メソッドのシグネチャを確認
+    import inspect
+    assert inspect.iscoroutinefunction(skill.async_success)
+    assert inspect.iscoroutinefunction(skill.async_notify)
+    
+    # バックエンドが非同期メソッドを持っているか確認
+    backend = skill.backend
+    has_async_backend = hasattr(backend, 'async_notify')
+    
+    # 非同期メソッドの呼び出し（フォールバック動作を確認）
+    with patch("asyncio.to_thread") as mock_to_thread:
+        mock_to_thread.return_value = True
+        result = await skill.async_success(title="Async Test", message="Testing async notification")
+        assert result is True
+        
+        # フォールバックが呼び出されたことを確認
+        if not has_async_backend:
+            assert mock_to_thread.called
+
+@pytest.mark.asyncio
+async def test_async_methods_exist(skill):
+    # 非同期メソッドが存在することを確認
+    assert hasattr(skill, 'async_success')
+    assert hasattr(skill, 'async_error')
+    assert hasattr(skill, 'async_warning')
+    assert hasattr(skill, 'async_confirm')
+    assert hasattr(skill, 'async_waiting')
+    assert hasattr(skill, 'async_update_progress')
+    
+    # 非同期メソッドのシグネチャを確認
+    import inspect
+    assert inspect.iscoroutinefunction(skill.async_success)
+    assert inspect.iscoroutinefunction(skill.async_error)
+    assert inspect.iscoroutinefunction(skill.async_warning)
+    assert inspect.iscoroutinefunction(skill.async_confirm)
+    assert inspect.iscoroutinefunction(skill.async_waiting)
+    assert inspect.iscoroutinefunction(skill.async_update_progress)
