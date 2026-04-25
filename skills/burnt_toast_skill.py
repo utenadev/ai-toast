@@ -11,10 +11,13 @@ import json
 import subprocess
 import shutil
 import base64
+import logging
 from pathlib import Path
 from typing import Optional, List, Dict, Union
 from dataclasses import dataclass, asdict
 
+# ロギングの設定
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ToastButton:
@@ -47,24 +50,42 @@ class ToastRequest:
 class BurntToastSkill:
     """BurntToast を使った感情伝達トーストの生成・送信スキル"""
 
+    # 定数定義
+    DEFAULT_PS_EXE = "powershell.exe"
+    DEFAULT_PS_ARGS = ["-NoProfile", "-ExecutionPolicy", "Bypass"]
+    WIN_PS_PATH = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+    DEFAULT_TIMEOUT = 10  # 秒
+    UTF8_ENCODING = "utf-8"
+    CP932_ENCODING = "cp932"
+
     def __init__(self, config_path: Optional[str] = None):
         self.config = self._load_config(config_path)
-        self.ps_exe = self.config.get("powershell_exe", "powershell.exe")
-        self.ps_args = self.config.get("powershell_args", [])
+        self.ps_exe = self.config.get("powershell_exe", self.DEFAULT_PS_EXE)
+        self.ps_args = self.config.get("powershell_args", self.DEFAULT_PS_ARGS)
         self.icon_base = Path(self.config.get("icon_base_path", ""))
         self.default_app_id = self.config.get("default_app_id")
         self.templates = self.config.get("emotion_templates", {})
+        self.timeout = self.config.get("timeout", self.DEFAULT_TIMEOUT)
 
     def _load_config(self, path: Optional[str]) -> dict:
-        """設定ファイルを読み込む。存在しない場合はデフォルト値を返す"""
-        if path and Path(path).exists():
-            with open(path, 'r', encoding='utf-8') as f:
+        """設定ファイルを読み込む。存在しない場合や不正な場合はデフォルト値を返す"""
+        if not path:
+            return {}
+            
+        config_path = Path(path)
+        if not config_path.exists():
+            logger.warning(f"設定ファイルが見つかりません: {path}")
+            return {}
+
+        try:
+            with open(config_path, 'r', encoding=self.UTF8_ENCODING) as f:
                 return json.load(f)
-        return {
-            "powershell_exe": "powershell.exe",
-            "powershell_args": ["-NoProfile", "-ExecutionPolicy", "Bypass"],
-            "emotion_templates": {}
-        }
+        except json.JSONDecodeError as e:
+            logger.error(f"設定ファイルの形式が不正です ({path}): {e}")
+            return {}
+        except Exception as e:
+            logger.error(f"設定ファイルの読み込み中にエラーが発生しました ({path}): {e}")
+            return {}
 
     def _wsl_to_win_path(self, path: str) -> str:
         """WSL パスを Windows パスに変換（必要時）"""
@@ -73,30 +94,34 @@ class BurntToastSkill:
         try:
             result = subprocess.run(
                 ['wslpath', '-w', path],
-                capture_output=True, text=True, check=True
+                capture_output=True, 
+                text=True, 
+                check=True,
+                timeout=5
             )
             return result.stdout.strip()
-        except (subprocess.CalledProcessError, FileNotFoundError):
-            # 変換失敗時はそのまま返す（Windows 側で処理）
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+            # 変換失敗時は手動置換によるフォールバック（Windows 側で処理）
             return path.replace('/mnt/c/', 'C:\\').replace('/', '\\')
 
     def _get_icon_path(self, icon_name: str) -> str:
         """アイコンのフルパスを取得し、必要に応じてWindows形式に変換する。パストラバーサルを防止する。"""
         # ベースパスが設定されている場合、その外に出ないかチェックする
         if self.icon_base and self.icon_base.as_posix() not in (".", ""):
-            base_resolved = self.icon_base.resolve()
-            # icon_name 自体が絶対パスやトラバーサルを含んでいる可能性を考慮
-            requested_path = (base_resolved / icon_name).resolve()
             try:
-                # requested_path が base_resolved のサブディレクトリであることを確認
+                base_resolved = self.icon_base.resolve()
+                requested_path = (base_resolved / icon_name).resolve()
+                # requested_path が base_resolved の配下であることを確認
                 requested_path.relative_to(base_resolved)
+                full_path = requested_path
             except ValueError:
+                logger.error(f"パストラバーサルの可能性を検知しました: {icon_name}")
                 raise ValueError(f"安全でないパスが指定されました: {icon_name}")
-            full_path = requested_path
         else:
             full_path = Path(icon_name)
 
         win_path = self._wsl_to_win_path(str(full_path))
+        # Windowsパスとしてバックスラッシュに統一
         if not win_path.startswith('/mnt/'):
             return win_path.replace('/', '\\')
         return win_path
@@ -121,11 +146,17 @@ class BurntToastSkill:
         # 画像設定
         icon = template.get("icon")
         if icon:
-            icon_path = self._get_icon_path(icon)
-            params.append(f"-AppLogo '{icon_path}'")
+            try:
+                icon_path = self._get_icon_path(icon)
+                params.append(f"-AppLogo '{icon_path}'")
+            except ValueError as e:
+                logger.warning(str(e))
         
         if req.hero_image:
             hero_path = self._wsl_to_win_path(req.hero_image)
+            # ヒーロー画像もWindowsパス形式に正規化
+            if not hero_path.startswith('/mnt/'):
+                hero_path = hero_path.replace('/', '\\')
             params.append(f"-HeroImage '{hero_path}'")
 
         # 音声設定
@@ -182,13 +213,12 @@ class BurntToastSkill:
         template = self.templates.get(req.emotion, {})
         ps_command = self._build_ps_command(req, template)
         
-        ps_exe = self.ps_exe  # デフォルトは "powershell.exe"
+        ps_exe = self.ps_exe
         
         # PATHで見つからない場合のフォールバック
         if not shutil.which(ps_exe):
-            fallback = "/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
-            if Path(fallback).exists():
-                ps_exe = fallback
+            if Path(self.WIN_PS_PATH).exists():
+                ps_exe = self.WIN_PS_PATH
 
         # コマンドインジェクション対策として -EncodedCommand を使用する
         encoded_cmd = self._encode_command(ps_command)
@@ -199,28 +229,34 @@ class BurntToastSkill:
             result = subprocess.run(
                 full_cmd,
                 capture_output=True,
-                timeout=10,
+                timeout=self.timeout,
                 shell=False
             )
             
-            # UTF-8で試行し、失敗したら CP932(Shift-JIS) でデコードを試みる
+            # デコード処理
+            stderr = ""
+            stdout = ""
             try:
-                stderr = result.stderr.decode('utf-8')
-                stdout = result.stdout.decode('utf-8')
+                stderr = result.stderr.decode(self.UTF8_ENCODING)
+                stdout = result.stdout.decode(self.UTF8_ENCODING)
             except UnicodeDecodeError:
-                stderr = result.stderr.decode('cp932', errors='replace')
-                stdout = result.stdout.decode('cp932', errors='replace')
+                stderr = result.stderr.decode(self.CP932_ENCODING, errors='replace')
+                stdout = result.stdout.decode(self.CP932_ENCODING, errors='replace')
 
             if result.returncode != 0:
-                print(f"[BurntToast] PowerShell Return Code: {result.returncode}")
-                print(f"[BurntToast] Standard Error: {stderr}")
-                print(f"[BurntToast] Standard Output: {stdout}")
+                logger.error(f"PowerShell実行エラー (Return Code: {result.returncode})")
+                if stderr: logger.error(f"stderr: {stderr.strip()}")
+                if stdout: logger.info(f"stdout: {stdout.strip()}")
             return result.returncode == 0
+
         except FileNotFoundError:
-            print(f"[BurntToast] Error: '{ps_exe}' not found in PATH.")
+            logger.error(f"PowerShell実行ファイルが見つかりません: '{ps_exe}'")
+            return False
+        except subprocess.TimeoutExpired:
+            logger.error(f"PowerShellの実行がタイムアウトしました ({self.timeout}s)")
             return False
         except Exception as e:
-            print(f"[BurntToast] Exception: {e}")
+            logger.exception(f"通知送信中に予期せぬエラーが発生しました: {e}")
             return False
 
     def send(self, emotion: str, title: str, message: str, **kwargs) -> bool:
