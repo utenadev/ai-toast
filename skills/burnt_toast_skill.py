@@ -10,6 +10,7 @@ BurntToast 通知スキル
 import json
 import subprocess
 import shutil
+import base64
 from pathlib import Path
 from typing import Optional, List, Dict, Union
 from dataclasses import dataclass, asdict
@@ -80,12 +81,31 @@ class BurntToastSkill:
             return path.replace('/mnt/c/', 'C:\\').replace('/', '\\')
 
     def _get_icon_path(self, icon_name: str) -> str:
-        """アイコンのフルパスを取得し、必要に応じてWindows形式に変換する"""
-        full_path = self.icon_base / icon_name if self.icon_base else Path(icon_name)
+        """アイコンのフルパスを取得し、必要に応じてWindows形式に変換する。パストラバーサルを防止する。"""
+        # ベースパスが設定されている場合、その外に出ないかチェックする
+        if self.icon_base and self.icon_base.as_posix() not in (".", ""):
+            base_resolved = self.icon_base.resolve()
+            # icon_name 自体が絶対パスやトラバーサルを含んでいる可能性を考慮
+            requested_path = (base_resolved / icon_name).resolve()
+            try:
+                # requested_path が base_resolved のサブディレクトリであることを確認
+                requested_path.relative_to(base_resolved)
+            except ValueError:
+                raise ValueError(f"安全でないパスが指定されました: {icon_name}")
+            full_path = requested_path
+        else:
+            full_path = Path(icon_name)
+
         win_path = self._wsl_to_win_path(str(full_path))
         if not win_path.startswith('/mnt/'):
             return win_path.replace('/', '\\')
         return win_path
+
+    def _encode_command(self, command: str) -> str:
+        """PowerShellの -EncodedCommand 用に文字列をBase64エンコードする"""
+        # PowerShellは UTF-16LE エンコーディングを期待する
+        utf16_cmd = command.encode('utf-16-le')
+        return base64.b64encode(utf16_cmd).decode('ascii')
 
     def _build_ps_command(self, req: ToastRequest, template: dict) -> str:
         """PowerShell コマンド文字列を構築"""
@@ -170,14 +190,17 @@ class BurntToastSkill:
             if Path(fallback).exists():
                 ps_exe = fallback
 
-        full_cmd = [ps_exe] + self.ps_args + ["-Command", ps_command]
+        # コマンドインジェクション対策として -EncodedCommand を使用する
+        encoded_cmd = self._encode_command(ps_command)
+        full_cmd = [ps_exe] + self.ps_args + ["-EncodedCommand", encoded_cmd]
         
         try:
-            # shell=True を指定せず、コマンドリストを渡す
+            # shell=False を指定し、コマンドインジェクションを防止
             result = subprocess.run(
                 full_cmd,
                 capture_output=True,
-                timeout=10
+                timeout=10,
+                shell=False
             )
             
             # UTF-8で試行し、失敗したら CP932(Shift-JIS) でデコードを試みる
