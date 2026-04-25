@@ -1,0 +1,3 @@
+[submodule "docs/external/BurntToast"]
+	path = docs/external/BurntToast
+	url = https://github.com/Windos/BurntToast

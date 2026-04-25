@@ -43,7 +43,6 @@ def dummy_config(tmp_path):
             }
         }
     }
-    # アイコンディレクトリを作成
     (tmp_path / "icons").mkdir()
     config_path = tmp_path / "burnt_toast_config.json"
     config_path.write_text(json.dumps(config))
@@ -69,10 +68,10 @@ def test_success_notification_command_generation(skill):
             ps_command = decode_ps_command(full_cmd[-1])
             
             assert "New-BurntToastNotification" in ps_command
-            assert "-Text '✨ Done', 'Task finished'" in ps_command
+            # 配列記法 @( ) になっていることを確認
+            assert "-Text @('✨ Done', 'Task finished')" in ps_command
 
 def test_wsl_path_conversion(skill):
-    """BurntToastBackend のパス変換をテスト"""
     backend = skill.backend
     with patch("subprocess.run") as mock_run:
         def side_effect(cmd, **kwargs):
@@ -87,30 +86,29 @@ def test_command_injection_prevention(skill):
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
         with patch("shutil.which", return_value="/usr/bin/powershell.exe"):
+            # シングルクォートを含む入力を指定
             malicious_title = "Done'; Write-Host 'Hacked"
             skill.success(title=malicious_title, message="Check console")
             args, _ = mock_run.call_args
             full_cmd = args[0]
             assert "-EncodedCommand" in full_cmd
             ps_command = decode_ps_command(full_cmd[-1])
-            assert malicious_title in ps_command
+            # シングルクォートが '' にエスケープされていることを確認
+            escaped_title = malicious_title.replace("'", "''")
+            assert escaped_title in ps_command
+            # エスケープされていない生のリテラルが含まれていないことを確認
+            assert malicious_title not in ps_command
 
 def test_path_traversal_prevention(skill):
-    """BurntToastBackend のパストラバーサル防止をテスト"""
     backend = skill.backend
     traversal_path = "../../etc/passwd"
     with pytest.raises(ValueError, match="安全でないパスが指定されました"):
         backend._get_icon_path(traversal_path)
 
 def test_broken_config_loading(tmp_path):
-    """
-    テストケース: 設定ファイルが壊れている場合でもデフォルト値で動作すること。
-    """
     broken_json = tmp_path / "broken.json"
     broken_json.write_text("{ invalid json }")
-    
     skill = BurntToastSkill(config_path=str(broken_json))
-    # ps_exe は backend に持たされている
     assert skill.backend.ps_exe == BurntToastBackend.DEFAULT_PS_EXE
     assert skill.templates == {}
 
@@ -122,9 +120,6 @@ def test_timeout_handling(skill):
             assert result is False
 
 def test_powershell_not_found(skill):
-    """
-    テストケース: powershell.exe が見つからない場合にFalseを返すこと。
-    """
     with patch("shutil.which", return_value=None):
         with patch("skills.burnt_toast_skill.Path.exists", return_value=False):
             result = skill.success(title="Test", message="Missing PS")

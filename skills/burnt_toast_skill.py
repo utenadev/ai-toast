@@ -121,42 +121,48 @@ class BurntToastBackend(NotificationBackend):
 
     def _build_ps_command(self, req: ToastRequest) -> str:
         """New-BurntToastNotification コマンドの構築"""
-        params = [
-            f"-Text '{req.title}', '{req.message}'",
-            f"-Attribution '{req.attribution}'"
-        ]
+        # PowerShell のシングルクォートエスケープ ( ' -> '' )
+        def ps_esc(s: Optional[str]) -> str:
+            if s is None: return ""
+            return str(s).replace("'", "''")
 
-        # 感情設定等の反映
-        if req.emotion and req.emotion != "custom":
-            # 実際の紐付けは Skill レイヤーで行われるが、
-            # バックエンドは渡された ToastRequest の属性を愚直に反映する
-            pass
+        # Text は配列として渡す
+        params = [
+            f"-Text @('{ps_esc(req.title)}', '{ps_esc(req.message)}')",
+            f"-Attribution '{ps_esc(req.attribution)}'"
+        ]
 
         if req.hero_image:
             hero_path = self._wsl_to_win_path(req.hero_image)
             if not hero_path.startswith('/mnt/'): hero_path = hero_path.replace('/', '\\')
-            params.append(f"-HeroImage '{hero_path}'")
+            params.append(f"-HeroImage '{ps_esc(hero_path)}'")
 
         if req.override_sound:
-            params.append(f"-Sound '{req.override_sound.replace('ms-winsoundevent:', '')}'")
+            params.append(f"-Sound '{ps_esc(req.override_sound.replace('ms-winsoundevent:', ''))}'")
         elif req.silent:
             params.append("-Silent")
 
         if req.urgent: params.append("-Urgent")
-        if req.scenario: params.append(f"-Scenario '{req.scenario}'")
+        # New-BurntToastNotification には -Scenario がないため、一旦コメントアウトまたは削除
+        # if req.scenario: params.append(f"-Scenario '{ps_esc(req.scenario)}'")
 
         if req.progress_value is not None:
-            status = req.progress_status or "処理中"
+            status = ps_esc(req.progress_status or "処理中")
             display = f"{int(req.progress_value * 100)}%"
-            params.append(f"-ProgressBar (New-BTProgressBar -Title '{status}' -Value {req.progress_value} -ValueDisplay '{display}')")
+            params.append(f"-ProgressBar (New-BTProgressBar -Status '{status}' -Value {req.progress_value} -ValueDisplay '{display}')")
 
-        if req.unique_id: params.append(f"-UniqueIdentifier '{req.unique_id}'")
+        if req.unique_id: params.append(f"-UniqueIdentifier '{ps_esc(req.unique_id)}'")
 
         if req.custom_buttons:
-            btn_strs = [f"(New-BTButton -Content '{b.label}' -Arguments '{b.arguments}'" + 
-                        (f" -Color {b.color}" if b.color else "") + ")" 
-                        for b in req.custom_buttons]
-            params.append(f"-Button {', '.join(btn_strs) if len(btn_strs) > 1 else btn_strs[0]}")
+            btn_strs = []
+            for b in req.custom_buttons:
+                color_part = f" -Color {b.color}" if b.color else ""
+                btn_strs.append(f"(New-BTButton -Content '{ps_esc(b.label)}' -Arguments '{ps_esc(b.arguments)}'{color_part})")
+            
+            if len(btn_strs) == 1:
+                params.append(f"-Button {btn_strs[0]}")
+            else:
+                params.append(f"-Button ({', '.join(btn_strs)})")
 
         return f"$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Import-Module BurntToast -ErrorAction SilentlyContinue; New-BurntToastNotification {' '.join(params)}"
 
@@ -280,8 +286,9 @@ class BurntToastSkill:
         kwargs.setdefault("custom_buttons", [ToastButton("✅ 適用", "confirm:yes", "Green"), 
                                             ToastButton("❌ 却下", "confirm:no", "Red")])
         return self.send("confirmation", title, message, **kwargs)
-    def update_progress(self, unique_id: str, value: float, status: Optional[str] = None) -> bool:
-        req = self._create_request("waiting", "", "", unique_id=unique_id, value=value, status=status)
+    def update_progress(self, unique_id: str, value: float, status: Optional[str] = None, **kwargs) -> bool:
+        """進捗バーを更新（同一ユニークIDで上書き）"""
+        req = self._create_request("waiting", "", "", unique_id=unique_id, value=value, status=status, **kwargs)
         return self.notify(req)
 
 def get_skill(config_path: Optional[str] = None):
