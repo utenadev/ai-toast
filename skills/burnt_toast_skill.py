@@ -214,13 +214,17 @@ class BurntToastSkill:
         ps_command = self._build_ps_command(req, template)
         
         ps_exe = self.ps_exe
-        
+
         # PATHで見つからない場合のフォールバック
         if not shutil.which(ps_exe):
             if Path(self.WIN_PS_PATH).exists():
                 ps_exe = self.WIN_PS_PATH
+            else:
+                logger.error(f"PowerShell実行ファイルが見つかりません: {ps_exe}")
+                return False
 
         # コマンドインジェクション対策として -EncodedCommand を使用する
+
         encoded_cmd = self._encode_command(ps_command)
         full_cmd = [ps_exe] + self.ps_args + ["-EncodedCommand", encoded_cmd]
         
