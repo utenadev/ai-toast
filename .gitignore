@@ -1,0 +1,12 @@
+# ai-toast gitignore
+.beads
+docs/t
+.dmux*
+.coverage
+__pycache__
+.pytest_cache
+.venv
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/

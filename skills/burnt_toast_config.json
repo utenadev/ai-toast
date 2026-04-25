@@ -1,0 +1,58 @@
+{
+  "powershell_exe": "powershell.exe",
+  "powershell_args": ["-NoProfile", "-ExecutionPolicy", "Bypass"],
+  "default_app_id": "CodingAgent.BurntToast",
+  "icon_base_path": "C:\\agents\\icons",
+  "emotion_templates": {
+    "success": {
+      "text_prefix": "✨",
+      "icon": "success.png",
+      "sound": "Mail",
+      "button_color": "Green",
+      "button_label": "確認",
+      "urgent": false,
+      "scenario": null
+    },
+    "error": {
+      "text_prefix": "⚠️",
+      "icon": "error.png",
+      "sound": "Default",
+      "button_color": "Red",
+      "button_label": "詳細",
+      "urgent": true,
+      "scenario": "Urgent"
+    },
+    "warning": {
+      "text_prefix": "🔶",
+      "icon": "warning.png",
+      "sound": "Reminder",
+      "button_color": "Yellow",
+      "button_label": "了解",
+      "urgent": false,
+      "scenario": null
+    },
+    "waiting": {
+      "text_prefix": "🔄",
+      "icon": "thinking.png",
+      "sound": null,
+      "use_progress": true,
+      "progress_title": "処理中",
+      "urgent": false,
+      "silent": true
+    },
+    "confirmation": {
+      "text_prefix": "🤖",
+      "icon": "agent.png",
+      "sound": "Call",
+      "scenario": "IncomingCall",
+      "urgent": true
+    },
+    "info": {
+      "text_prefix": "💡",
+      "icon": "info.png",
+      "sound": "Default",
+      "urgent": false,
+      "scenario": null
+    }
+  }
+}
