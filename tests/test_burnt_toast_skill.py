@@ -4,7 +4,7 @@ import base64
 import subprocess
 from unittest.mock import patch, MagicMock
 from pathlib import Path
-from skills.burnt_toast_skill import BurntToastSkill, ToastRequest, ToastButton, get_skill
+from skills.burnt_toast_skill import BurntToastSkill, BurntToastBackend, ToastRequest, ToastButton, get_skill
 
 @pytest.fixture
 def dummy_config(tmp_path):
@@ -72,13 +72,15 @@ def test_success_notification_command_generation(skill):
             assert "-Text '✨ Done', 'Task finished'" in ps_command
 
 def test_wsl_path_conversion(skill):
+    """BurntToastBackend のパス変換をテスト"""
+    backend = skill.backend
     with patch("subprocess.run") as mock_run:
         def side_effect(cmd, **kwargs):
             if cmd[0] == "wslpath":
                 return MagicMock(stdout="C:\\test\\image.png\n", returncode=0)
             return MagicMock(returncode=0)
         mock_run.side_effect = side_effect
-        win_path = skill._wsl_to_win_path("/mnt/c/test/image.png")
+        win_path = backend._wsl_to_win_path("/mnt/c/test/image.png")
         assert win_path == "C:\\test\\image.png"
 
 def test_command_injection_prevention(skill):
@@ -94,9 +96,11 @@ def test_command_injection_prevention(skill):
             assert malicious_title in ps_command
 
 def test_path_traversal_prevention(skill):
+    """BurntToastBackend のパストラバーサル防止をテスト"""
+    backend = skill.backend
     traversal_path = "../../etc/passwd"
     with pytest.raises(ValueError, match="安全でないパスが指定されました"):
-        skill._get_icon_path(traversal_path)
+        backend._get_icon_path(traversal_path)
 
 def test_broken_config_loading(tmp_path):
     """
@@ -106,13 +110,11 @@ def test_broken_config_loading(tmp_path):
     broken_json.write_text("{ invalid json }")
     
     skill = BurntToastSkill(config_path=str(broken_json))
-    assert skill.ps_exe == BurntToastSkill.DEFAULT_PS_EXE
+    # ps_exe は backend に持たされている
+    assert skill.backend.ps_exe == BurntToastBackend.DEFAULT_PS_EXE
     assert skill.templates == {}
 
 def test_timeout_handling(skill):
-    """
-    テストケース: PowerShell実行がタイムアウトした場合にFalseを返すこと。
-    """
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="powershell", timeout=10)
         with patch("shutil.which", return_value="/usr/bin/powershell.exe"):
@@ -124,15 +126,11 @@ def test_powershell_not_found(skill):
     テストケース: powershell.exe が見つからない場合にFalseを返すこと。
     """
     with patch("shutil.which", return_value=None):
-        # BurntToastSkill.WIN_PS_PATH の存在確認をモック
         with patch("skills.burnt_toast_skill.Path.exists", return_value=False):
             result = skill.success(title="Test", message="Missing PS")
             assert result is False
 
 def test_special_characters_handling(skill):
-    """
-    テストケース: 日本語や絵文字などの特殊文字が正しくエンコードされること。
-    """
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
         with patch("shutil.which", return_value="/usr/bin/powershell.exe"):
@@ -143,9 +141,6 @@ def test_special_characters_handling(skill):
             assert special_text in ps_command
 
 def test_empty_input_handling(skill):
-    """
-    テストケース: 空文字の入力に対してもエラーにならず実行されること。
-    """
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0)
         with patch("shutil.which", return_value="/usr/bin/powershell.exe"):
