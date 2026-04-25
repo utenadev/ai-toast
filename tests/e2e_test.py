@@ -59,9 +59,10 @@ def run_e2e_test():
     
     print(f"🔔 Sending notification: {test_title}")
     
-    # 3. 通知送信
-    # 実際の環境では powershell.exe が必要
-    success = skill.success(title=test_title, message=test_message)
+    # 3. 通知送信 - E2Eテスト用に永続性を確保
+    # Urgentフラグを使用してFocus Assistを突破し、自動消失を防ぐ
+    # 将来的にはExpirationTimeパラメータを追加することを検討
+    success = skill.success(title=test_title, message=test_message, urgent=True)
     
     if not success:
         print("❌ Failed to execute PowerShell command.")
